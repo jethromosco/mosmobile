@@ -4,7 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import '../constants/category_map.dart';
 import '../db/db_helper.dart';
 import '../models/product.dart';
-import 'action_screen.dart';
+import 'product_detail_screen.dart';
 import 'diagnostic_screen.dart';
 
 class SearchScreen extends StatefulWidget {
@@ -121,9 +121,9 @@ class _SearchScreenState extends State<SearchScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.upload_file),
-            tooltip: 'Import Database',
-            onPressed: _importDatabase,
+            icon: const Icon(Icons.folder_open),
+            tooltip: 'Import / Export',
+            onPressed: _showImportExportMenu,
           ),
         ],
       ),
@@ -205,7 +205,7 @@ class _SearchScreenState extends State<SearchScreen> {
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (context) => ActionScreen(
+                                        builder: (context) => ProductDetailScreen(
                                           product: product,
                                           category: widget.category,
                                         ),
@@ -300,6 +300,94 @@ class _SearchScreenState extends State<SearchScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showImportExportMenu() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16.0),
+                child: Text(
+                  'Choose an action',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _importDatabase();
+                  },
+                  icon: const Icon(Icons.download),
+                  label: const Text('Import Database'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _exportDatabase();
+                  },
+                  icon: const Icon(Icons.upload),
+                  label: const Text('Export Database'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportDatabase() async {
+    try {
+      final dbFileName = categoryDbMap[widget.category];
+      if (dbFileName == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid category.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      await _dbHelper.exportDb(dbFileName);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Database exported: $dbFileName'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[ERROR] _exportDatabase: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export failed: $e'),
             backgroundColor: Colors.red,
           ),
         );

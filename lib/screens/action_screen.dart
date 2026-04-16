@@ -28,13 +28,6 @@ class _ActionScreenState extends State<ActionScreen> {
       appBar: AppBar(
         title: const Text('Stock Action'),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.share),
-            tooltip: 'Export Database',
-            onPressed: _exportDatabase,
-          ),
-        ],
       ),
       body: Center(
         child: Column(
@@ -201,12 +194,26 @@ class _ActionScreenState extends State<ActionScreen> {
       final now = DateTime.now();
       final dateStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
 
+      // Determine notes field: "ACTUAL" or "RESET" — MUST BE UPPERCASE
+      final String notes = value == 0 ? 'RESET' : 'ACTUAL';
+      debugPrint('[ACTION] Setting notes to: $notes (value=$value)');
+
+      // Create transaction entry matching desktop app schema
+      // For ACTUAL/RESET: name column contains "ACTUAL" or "RESET", product is reconstructed from type/id_size/od_size/th_size/brand
       final entry = TransactionEntry(
-        type: 'Actual',
-        value: value,
         date: dateStr,
-        productId: widget.product.id,
+        productType: widget.product.type, // e.g., "TC"
+        idSize: widget.product.innerDiameter.toString(),
+        odSize: widget.product.outerDiameter.toString(),
+        thSize: widget.product.thickness.toString(),
+        brand: widget.product.brand,
+        productName: notes, // "ACTUAL" or "RESET" goes in name column
+        quantity: value.toInt(), // Stock count for ACTUAL
+        price: 0.0, // Price not used for ACTUAL transactions in desktop app
+        isRestock: 2, // 2 = ACTUAL (green) transaction type
+        notes: notes, // MUST be exactly "ACTUAL" or "RESET"
       );
+      debugPrint('[ACTION] Created entry with notes: ${entry.notes}');
 
       final dbFileName = categoryDbMap[widget.category] ?? '';
       final saved = await _dbHelper.saveTransaction(dbFileName, entry);
@@ -250,8 +257,9 @@ class _ActionScreenState extends State<ActionScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Failed to save. Please try again.'),
+            content: Text('Failed to save transaction. Check console for details.'),
             backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
           ),
         );
       }

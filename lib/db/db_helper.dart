@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
@@ -264,10 +263,11 @@ class DbHelper {
     return null;
   }
 
-  /// Inserts a new Actual transaction row
+  /// Inserts a new ACTUAL transaction row
+  /// Matches desktop app's exact schema with is_restock=2 for ACTUAL counts
   Future<bool> saveTransaction(String dbFileName, TransactionEntry entry) async {
     if (kIsWeb) {
-      debugPrint('[DB] Web platform detected - database operations not supported on web');
+      debugPrint('[DB] saveTransaction skipped on web');
       return false;
     }
     try {
@@ -277,9 +277,32 @@ class DbHelper {
         return false;
       }
 
-      await db.insert('transactions', entry.toMap());
-      debugPrint('[TRANSACTION] Saved: type=${entry.type}, value=${entry.value}, date=${entry.date}');
-      return true;
+      final data = entry.toMap();
+      debugPrint('[TRANSACTION] Full data map: $data');
+      debugPrint('[TRANSACTION] Inserting: date=${entry.date}, type=${entry.productType}, quantity=${entry.quantity}, is_restock=${entry.isRestock}, notes=${entry.notes}');
+      debugPrint('[TRANSACTION] Notes type: ${entry.notes.runtimeType}, value: "${entry.notes}"');
+
+      // Try to insert with all columns (including notes)
+      try {
+        final rowId = await db.insert('transactions', data);
+        debugPrint('[TRANSACTION] Saved: ${entry.productName} - qty=${entry.quantity}, is_restock=${entry.isRestock}, rowId=$rowId');
+        debugPrint('[TRANSACTION] Inserted notes value: "${entry.notes}"');
+        return true;
+      } catch (insertError) {
+        // If insert fails (likely due to missing notes column), try without notes
+        debugPrint('[DB] First insert attempt failed: $insertError. Trying without notes column...');
+        final dataWithoutNotes = {...data};
+        dataWithoutNotes.remove('notes');
+        
+        try {
+          await db.insert('transactions', dataWithoutNotes);
+          debugPrint('[TRANSACTION] Saved (without notes): ${entry.productName} - qty=${entry.quantity}, is_restock=${entry.isRestock}');
+          return true;
+        } catch (retryError) {
+          debugPrint('[ERROR] Both insert attempts failed. First: $insertError. Second: $retryError');
+          rethrow;
+        }
+      }
     } catch (e) {
       debugPrint('[ERROR] saveTransaction: $e');
       return false;
@@ -287,13 +310,38 @@ class DbHelper {
   }
 
   /// Exports (shares) the .db file using share_plus
+  /// Exports the .db file with WAL checkpoint to ensure single self-contained file
   Future<void> exportDb(String dbFileName) async {
     if (kIsWeb) {
       debugPrint('[DB] Web platform detected - database operations not supported on web');
       return;
     }
     try {
+      // Get database path
       final dbPath = await getDbPath(dbFileName);
+
+      // Use cached database connection if available, otherwise open temporarily
+      Database? db = _databases[dbFileName];
+      bool shouldClose = false;
+      
+      if (db == null) {
+        db = await openDatabase(dbPath);
+        shouldClose = true;
+      }
+
+      if (db != null) {
+        debugPrint('[DB] Executing WAL checkpoint before export...');
+        // Use rawQuery for PRAGMA statements (execute doesn't work for PRAGMA on Android)
+        await db.rawQuery('PRAGMA wal_checkpoint(TRUNCATE);');
+        debugPrint('[DB] WAL checkpoint completed');
+        
+        // Only close if we opened it temporarily
+        if (shouldClose) {
+          await db.close();
+        }
+      }
+
+      // Export the file via share
       await Share.shareXFiles(
         [XFile(dbPath)],
         subject: 'MOSCO Database Export',
@@ -301,6 +349,7 @@ class DbHelper {
       debugPrint('[DB] File exported: $dbFileName');
     } catch (e) {
       debugPrint('[ERROR] exportDb: $e');
+      rethrow;
     }
   }
 }

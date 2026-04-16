@@ -58,5 +58,13 @@ class Product {
     );
   }
 
-  String get displayName => '$type $innerDiameter-$outerDiameter-$thickness $brand';
+  /// Formats a dimension value by removing unnecessary .0 decimals
+  String _formatDimension(double value) {
+    if (value == value.toInt()) {
+      return value.toInt().toString();
+    }
+    return value.toString();
+  }
+
+  String get displayName => '$type ${_formatDimension(innerDiameter)}-${_formatDimension(outerDiameter)}-${_formatDimension(thickness)} $brand';
 }
