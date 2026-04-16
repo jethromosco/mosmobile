@@ -22,7 +22,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   final DbHelper _dbHelper = DbHelper();
   late TextEditingController _actualCountController;
   bool _isSaving = false;
-  int _currentStockCount = 0;
 
   @override
   void initState() {
@@ -122,9 +121,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = const Color(0xFFE53935);
-    final surfaceColor = const Color(0xFF1A1A1A);
+    const primaryColor = Color(0xFFE53935);
+    const surfaceColor = Color(0xFF1A1A1A);
     final labelTextStyle = TextStyle(
       fontSize: 12,
       color: Colors.grey[400],
@@ -134,11 +132,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       fontSize: 16,
       color: Colors.white,
       fontWeight: FontWeight.w600,
-    );
-    final metricValueStyle = TextStyle(
-      fontSize: 24,
-      color: primaryColor,
-      fontWeight: FontWeight.bold,
     );
 
     return Scaffold(

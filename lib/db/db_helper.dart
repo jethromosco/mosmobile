@@ -329,16 +329,14 @@ class DbHelper {
         shouldClose = true;
       }
 
-      if (db != null) {
-        debugPrint('[DB] Executing WAL checkpoint before export...');
-        // Use rawQuery for PRAGMA statements (execute doesn't work for PRAGMA on Android)
-        await db.rawQuery('PRAGMA wal_checkpoint(TRUNCATE);');
-        debugPrint('[DB] WAL checkpoint completed');
-        
-        // Only close if we opened it temporarily
-        if (shouldClose) {
-          await db.close();
-        }
+      debugPrint('[DB] Executing WAL checkpoint before export...');
+      // Use rawQuery for PRAGMA statements (execute doesn't work for PRAGMA on Android)
+      await db.rawQuery('PRAGMA wal_checkpoint(TRUNCATE);');
+      debugPrint('[DB] WAL checkpoint completed');
+      
+      // Only close if we opened it temporarily
+      if (shouldClose) {
+        await db.close();
       }
 
       // Export the file via share
@@ -351,5 +349,111 @@ class DbHelper {
       debugPrint('[ERROR] exportDb: $e');
       rethrow;
     }
+  }
+
+  /// Get current stock count for a product from transactions
+  Future<int> getCurrentStock(String dbFileName, int productId) async {
+    if (kIsWeb) return 0;
+    try {
+      final db = await openCategoryDb(dbFileName);
+      if (db == null) return 0;
+
+      // Discover transactions table name
+      final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+      );
+      final tableNames = tables.map((t) => t['name'] as String).toList();
+      debugPrint('[DB] Tables for stock calc: $tableNames');
+
+      // Try common transaction table names
+      String? txTable = _findTableName(tableNames, [
+        'transactions', 'transaction', 'stock_transactions', 'inventory_transactions'
+      ]);
+
+      if (txTable == null) {
+        debugPrint('[ERROR] No transactions table found');
+        return 0;
+      }
+
+      // Get all transactions for this product
+      final rows = await db.rawQuery(
+        'SELECT * FROM $txTable WHERE product_id=? ORDER BY rowid ASC',
+        [productId],
+      );
+
+      debugPrint('[STOCK] Found ${rows.length} transactions for product $productId');
+
+      int stock = 0;
+      for (final row in rows) {
+        debugPrint('[STOCK] Row: $row');
+        final type = row['type']?.toString().toLowerCase() ?? '';
+        final value = double.tryParse(row['value']?.toString() ?? '0') ?? 0;
+
+        if (type == 'actual') {
+          stock = value.toInt(); // sets exact stock
+        } else if (type == 'restock' || type == 'fabrication') {
+          stock += value.toInt(); // adds to stock
+        } else if (type == 'sale') {
+          stock -= value.toInt(); // subtracts from stock
+        }
+      }
+
+      debugPrint('[STOCK] Calculated stock for product $productId: $stock');
+      return stock < 0 ? 0 : stock;
+
+    } catch (e) {
+      debugPrint('[ERROR] getCurrentStock: $e');
+      return 0;
+    }
+  }
+
+  /// Get product price from database
+  Future<double> getProductPrice(String dbFileName, int productId) async {
+    if (kIsWeb) return 0.0;
+    try {
+      final db = await openCategoryDb(dbFileName);
+      if (db == null) return 0.0;
+
+      // Find products table
+      final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+      );
+      final tableNames = tables.map((t) => t['name'] as String).toList();
+      String tableName = tableNames.contains('products') ? 'products' : tableNames.first;
+
+      // Get price column — try common names
+      final cols = await db.rawQuery('PRAGMA table_info($tableName)');
+      final colNames = cols.map((c) => c['name'] as String).toList();
+      final priceCol = _findColumn(colNames, ['price', 'srp', 'selling_price', 'cost', 'unit_price']);
+
+      if (priceCol == null) {
+        debugPrint('[DB] No price column found in $tableName');
+        return 0.0;
+      }
+
+      final rows = await db.rawQuery(
+        'SELECT "$priceCol" FROM $tableName WHERE rowid=?',
+        [productId],
+      );
+
+      if (rows.isEmpty) return 0.0;
+      return double.tryParse(rows.first[priceCol]?.toString() ?? '0') ?? 0.0;
+
+    } catch (e) {
+      debugPrint('[ERROR] getProductPrice: $e');
+      return 0.0;
+    }
+  }
+
+  /// Helper to find table name
+  String? _findTableName(List<String> available, List<String> candidates) {
+    for (final candidate in candidates) {
+      if (available.any((t) => t.toLowerCase() == candidate.toLowerCase())) {
+        return available.firstWhere(
+          (t) => t.toLowerCase() == candidate.toLowerCase(),
+        );
+      }
+    }
+    return null;
   }
 }
