@@ -1,0 +1,62 @@
+class Product {
+  final int id;
+  final double innerDiameter;
+  final double outerDiameter;
+  final double thickness;
+  final String type;
+  final String brand;
+
+  Product({
+    required this.id,
+    required this.innerDiameter,
+    required this.outerDiameter,
+    required this.thickness,
+    required this.type,
+    required this.brand,
+  });
+
+  factory Product.fromMap(Map<String, dynamic> map) {
+    double parseNum(dynamic val) {
+      if (val == null) return 0.0;
+      if (val is double) return val;
+      if (val is int) return val.toDouble();
+      return double.tryParse(val.toString()) ?? 0.0;
+    }
+    return Product(
+      id: map['rowid'] ?? map['_id'] ?? 0,
+      innerDiameter: parseNum(map['id']),
+      outerDiameter: parseNum(map['od']),
+      thickness: parseNum(map['thk']),
+      type: map['type']?.toString() ?? '',
+      brand: map['brand']?.toString() ?? '',
+    );
+  }
+
+  factory Product.fromMapDynamic(
+    Map<String, dynamic> map, {
+    required String idCol,
+    required String odCol,
+    required String thkCol,
+  }) {
+    double parseNum(dynamic val) {
+      if (val == null) return 0.0;
+      if (val is double) return val;
+      if (val is int) return val.toDouble();
+      return double.tryParse(val.toString()) ?? 0.0;
+    }
+
+    // Use rowid as primary key to avoid conflict with 'id' dimension column
+    final primaryKey = map['rowid'] ?? map['_id'] ?? map['pk'] ?? 0;
+
+    return Product(
+      id: primaryKey is int ? primaryKey : int.tryParse(primaryKey.toString()) ?? 0,
+      innerDiameter: parseNum(map[idCol]),
+      outerDiameter: parseNum(map[odCol]),
+      thickness: parseNum(map[thkCol]),
+      type: map['type']?.toString() ?? map['seal_type']?.toString() ?? '',
+      brand: map['brand']?.toString() ?? map['manufacturer']?.toString() ?? '',
+    );
+  }
+
+  String get displayName => '$type $innerDiameter-$outerDiameter-$thickness $brand';
+}
