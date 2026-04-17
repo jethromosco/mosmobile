@@ -41,8 +41,16 @@ class _ActionScreenState extends State<ActionScreen> {
 
   Future<void> _loadProductData() async {
     final dbFileName = categoryDbMap[widget.category] ?? '';
+    debugPrint('[ACTION] Loading data for product: ${widget.product.displayName}');
+    debugPrint('[ACTION] product.id=${widget.product.id}');
+    debugPrint('[ACTION] product.innerDiameter=${widget.product.innerDiameter}');
+    debugPrint('[ACTION] dbFileName=$dbFileName');
+    
     final stock = await _dbHelper.getCurrentStock(dbFileName, widget.product.id);
     final price = await _dbHelper.getProductPrice(dbFileName, widget.product.id);
+    
+    debugPrint('[ACTION] Stock result: $stock, Price result: $price');
+    
     if (mounted) {
       setState(() {
         _currentStock = stock;
@@ -65,8 +73,8 @@ class _ActionScreenState extends State<ActionScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1A1A1A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Icon(Icons.warning_amber_rounded, color: Color(0xFFE53935), size: 28),
             SizedBox(width: 10),
             Text(
@@ -96,14 +104,14 @@ class _ActionScreenState extends State<ActionScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFE53935).withOpacity(0.1),
+                color: const Color(0xFFE53935).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: const Color(0xFFE53935).withOpacity(0.3),
+                  color: const Color(0xFFE53935).withValues(alpha: 0.3),
                 ),
               ),
-              child: Row(
-                children: const [
+              child: const Row(
+                children: [
                   Icon(Icons.info_outline, color: Color(0xFFE53935), size: 16),
                   SizedBox(width: 8),
                   Expanded(
@@ -315,14 +323,6 @@ class _ActionScreenState extends State<ActionScreen> {
                         color: Colors.white,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      widget.category,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey[400],
-                      ),
-                    ),
                     const SizedBox(height: 24),
 
                     // Stock Count Card
@@ -412,7 +412,7 @@ class _ActionScreenState extends State<ActionScreen> {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 24),
 
                     // Actual Count Input
                     TextField(
@@ -433,18 +433,21 @@ class _ActionScreenState extends State<ActionScreen> {
                         filled: true,
                         fillColor: const Color(0xFF1A1A1A),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide.none,
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: Colors.grey[800]!,
+                            width: 1,
+                          ),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(12),
                           borderSide: const BorderSide(
                             color: Color(0xFFE53935),
                             width: 2,
                           ),
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(12),
                           borderSide: BorderSide(
                             color: Colors.grey[800]!,
                             width: 1,
@@ -465,7 +468,7 @@ class _ActionScreenState extends State<ActionScreen> {
                       ),
                       onChanged: (_) => setState(() {}),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 20),
 
                     // Action Buttons
                     SizedBox(

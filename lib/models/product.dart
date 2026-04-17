@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class Product {
   final int id;
   final double innerDiameter;
@@ -22,8 +24,12 @@ class Product {
       if (val is int) return val.toDouble();
       return double.tryParse(val.toString()) ?? 0.0;
     }
+    
+    final rowId = map['rowid'] ?? map['_id'] ?? 0;
+    debugPrint('[PRODUCT] fromMap: rowid=$rowId, map keys=${map.keys.toList()}');
+    
     return Product(
-      id: map['rowid'] ?? map['_id'] ?? 0,
+      id: rowId,
       innerDiameter: parseNum(map['id']),
       outerDiameter: parseNum(map['od']),
       thickness: parseNum(map['thk']),

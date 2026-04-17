@@ -168,12 +168,14 @@ class DbHelper {
         return [];
       }
 
+      // Assign dimensions using physical logic:
+      // OD (outer diameter) = largest, ID (inner diameter) = smallest, TH (thickness) = middle
       nums.sort();
-      final thk = nums[0];
-      final id = nums[1];
-      final od = nums[2];
+      final id = nums[0];      // Smallest = inner diameter
+      final thk = nums[1];     // Middle = thickness
+      final od = nums[2];      // Largest = outer diameter
 
-      debugPrint('[SEARCH] THK=$thk, ID=$id, OD=$od');
+      debugPrint('[SEARCH] ID=$id, OD=$od, THK=$thk');
 
       final db = await openCategoryDb(dbFileName);
       if (db == null) return [];
@@ -214,9 +216,9 @@ class DbHelper {
         return [];
       }
 
-      // Try exact match first
+      // Try exact match first — ALWAYS include rowid
       var results = await db.rawQuery(
-        'SELECT * FROM $tableName WHERE CAST("$idCol" AS REAL)=? AND CAST("$odCol" AS REAL)=? AND CAST("$thkCol" AS REAL)=?',
+        'SELECT rowid, * FROM $tableName WHERE CAST("$idCol" AS REAL)=? AND CAST("$odCol" AS REAL)=? AND CAST("$thkCol" AS REAL)=?',
         [id, od, thk],
       );
 
@@ -226,7 +228,7 @@ class DbHelper {
       if (results.isEmpty) {
         debugPrint('[SEARCH] Trying with ±0.1 tolerance...');
         results = await db.rawQuery(
-          '''SELECT * FROM $tableName 
+          '''SELECT rowid, * FROM $tableName 
              WHERE ABS(CAST("$idCol" AS REAL) - ?) < 0.11 
              AND ABS(CAST("$odCol" AS REAL) - ?) < 0.11 
              AND ABS(CAST("$thkCol" AS REAL) - ?) < 0.11''',
@@ -352,62 +354,208 @@ class DbHelper {
   }
 
   /// Get current stock count for a product from transactions
-  Future<int> getCurrentStock(String dbFileName, int productId) async {
+  Future<int> getCurrentStock(String dbFileName, int productRowId) async {
     if (kIsWeb) return 0;
     try {
       final db = await openCategoryDb(dbFileName);
       if (db == null) return 0;
 
-      // Discover transactions table name
+      debugPrint('[STOCK] Getting stock for productRowId=$productRowId');
+
+      // Get the product from products table FIRST
+      final prodRows = await db.rawQuery(
+        'SELECT rowid, * FROM products WHERE rowid=?',
+        [productRowId],
+      );
+
+      if (prodRows.isEmpty) {
+        debugPrint('[ERROR] Product not found with rowid=$productRowId');
+        return 0;
+      }
+
+      final prod = prodRows.first;
+      debugPrint('[STOCK] Product data: $prod');
+
+      // Extract product fields from products table
+      String? prodTypeCol = _findColumn(prod.keys.toList(), ['type', 'product_type', 'seal_type']);
+      String? prodIdCol = _findColumn(prod.keys.toList(), ['id', 'inner_diameter', 'id_size']);
+      String? prodOdCol = _findColumn(prod.keys.toList(), ['od', 'outer_diameter', 'od_size']);
+      String? prodThkCol = _findColumn(prod.keys.toList(), ['th', 'thk', 'thickness', 'th_size']);
+      String? prodBrandCol = _findColumn(prod.keys.toList(), ['brand', 'manufacturer']);
+
+      if (prodTypeCol == null || prodIdCol == null || prodOdCol == null || prodThkCol == null || prodBrandCol == null) {
+        debugPrint('[ERROR] Missing product columns. Available: ${prod.keys}');
+        return 0;
+      }
+
+      final prodType = prod[prodTypeCol]?.toString().trim() ?? '';
+      final prodId = prod[prodIdCol];
+      final prodOd = prod[prodOdCol];
+      final prodThk = prod[prodThkCol];
+      final prodBrand = prod[prodBrandCol]?.toString().trim() ?? '';
+      
+      debugPrint('[STOCK] Product key: type=$prodType, id=$prodId, od=$prodOd, thk=$prodThk, brand=$prodBrand');
+
+      // Find transactions table
       final tables = await db.rawQuery(
         "SELECT name FROM sqlite_master WHERE type='table'"
       );
       final tableNames = tables.map((t) => t['name'] as String).toList();
-      debugPrint('[DB] Tables for stock calc: $tableNames');
-
-      // Try common transaction table names
-      String? txTable = _findTableName(tableNames, [
-        'transactions', 'transaction', 'stock_transactions', 'inventory_transactions'
-      ]);
-
+      
+      String? txTable;
+      for (final name in tableNames) {
+        if (name.toLowerCase().contains('trans')) {
+          txTable = name;
+          break;
+        }
+      }
       if (txTable == null) {
-        debugPrint('[ERROR] No transactions table found');
+        debugPrint('[ERROR] No transactions table. Tables: $tableNames');
         return 0;
       }
 
-      // Get all transactions for this product
-      final rows = await db.rawQuery(
-        'SELECT * FROM $txTable WHERE product_id=? ORDER BY rowid ASC',
-        [productId],
-      );
+      debugPrint('[STOCK] Using transactions table: $txTable');
 
-      debugPrint('[STOCK] Found ${rows.length} transactions for product $productId');
+      // Get transaction table column names
+      final cols = await db.rawQuery('PRAGMA table_info($txTable)');
+      final colNames = cols.map((c) => c['name'] as String).toList();
+      debugPrint('[STOCK] Transaction columns: $colNames');
 
+      // Find the column names in transactions table
+      String? typeCol = _findColumn(colNames, ['type', 'product_type', 'seal_type']);
+      String? idCol = _findColumn(colNames, ['id_size', 'id', 'inner_diameter']);
+      String? odCol = _findColumn(colNames, ['od_size', 'od', 'outer_diameter']);
+      String? thkCol = _findColumn(colNames, ['th_size', 'th', 'thk', 'thickness']);
+      String? brandCol = _findColumn(colNames, ['brand', 'manufacturer']);
+      String? dateCol = _findColumn(colNames, ['date', 'transaction_date']);
+      String? nameCol = _findColumn(colNames, ['name', 'description']);
+      String? qtyCol = _findColumn(colNames, ['quantity', 'qty', 'value', 'amount']);
+      String? priceCol = _findColumn(colNames, ['price', 'cost', 'amount']);
+      String? isRestockCol = _findColumn(colNames, ['is_restock', 'type']);
+
+      if (typeCol == null || idCol == null || odCol == null || thkCol == null || brandCol == null) {
+        debugPrint('[ERROR] Missing product key columns in transactions. Available: $colNames');
+        return 0;
+      }
+
+      if (dateCol == null || nameCol == null || qtyCol == null || priceCol == null || isRestockCol == null) {
+        debugPrint('[ERROR] Missing transaction columns. Available: $colNames');
+        return 0;
+      }
+
+      // Query transactions with ONLY the 6 columns needed, in the CORRECT ORDER
+      // Desktop app format: date, name, quantity, price, is_restock, brand
+      List<Map<String, dynamic>> rows = [];
+      try {
+        debugPrint('[STOCK] WHERE clause will use: type="$prodType" (${prodType.runtimeType}), id="$prodId" (${prodId.runtimeType}), od="$prodOd", thk="$prodThk", brand="$prodBrand" (${prodBrand.runtimeType})');
+        
+        rows = await db.rawQuery(
+          'SELECT "$dateCol", "$nameCol", "$qtyCol", "$priceCol", "$isRestockCol", "$brandCol" FROM $txTable '
+          'WHERE "$typeCol"=? AND "$idCol"=? AND "$odCol"=? AND "$thkCol"=? AND "$brandCol"=? '
+          'ORDER BY "$dateCol" ASC, rowid ASC',
+          [prodType, prodId, prodOd, prodThk, prodBrand],
+        );
+        debugPrint('[STOCK] Query succeeded, found ${rows.length} transactions');
+      } catch (e) {
+        debugPrint('[ERROR] Transaction query failed: $e');
+        return 0;
+      }
+
+      if (rows.isEmpty) {
+        debugPrint('[STOCK] ⚠️ NO TRANSACTIONS FOUND!');
+        debugPrint('[STOCK] Looking for: type=$prodType, id=$prodId, od=$prodOd, thk=$prodThk, brand=$prodBrand');
+        
+        // Debug: Show ALL transactions to see what's actually in the database
+        try {
+          final countResult = await db.rawQuery('SELECT COUNT(*) as cnt FROM $txTable');
+          final totalCount = countResult.first['cnt'] ?? 0;
+          debugPrint('[STOCK] Total transactions in $txTable: $totalCount');
+          
+          if (totalCount is int && totalCount > 0) {
+            debugPrint('[STOCK] Sample transactions (first 10):');
+            final allTx = await db.rawQuery('SELECT * FROM $txTable ORDER BY rowid DESC LIMIT 10');
+            for (final tx in allTx) {
+              debugPrint('[STOCK]   ${tx.toString()}');
+            }
+            
+            // Show distinct product keys in transactions
+            debugPrint('[STOCK] Distinct product keys in transactions:');
+            final distinctKeys = await db.rawQuery(
+              'SELECT DISTINCT "$typeCol", "$idCol", "$odCol", "$thkCol", "$brandCol" FROM $txTable LIMIT 5'
+            );
+            for (final key in distinctKeys) {
+              debugPrint('[STOCK]   $key');
+            }
+          } else {
+            debugPrint('[STOCK] ❌ TRANSACTIONS TABLE IS EMPTY - No transactions have been saved!');
+          }
+        } catch (e) {
+          debugPrint('[STOCK] Could not read all transactions: $e');
+        }
+        
+        return 0;
+      }
+
+      debugPrint('[STOCK] First transaction: ${rows.first}');
+      debugPrint('[STOCK] Last transaction: ${rows.last}');
+
+      // Process transactions chronologically using desktop app algorithm
+      // Rows now contain: date, name, quantity, price, is_restock, brand (in that order)
       int stock = 0;
-      for (final row in rows) {
-        debugPrint('[STOCK] Row: $row');
-        final type = row['type']?.toString().toLowerCase() ?? '';
-        final value = double.tryParse(row['value']?.toString() ?? '0') ?? 0;
+      for (int i = 0; i < rows.length; i++) {
+        final row = rows[i];
+        
+        // Unpack in the CORRECT ORDER that desktop app expects
+        // Index 0: date, 1: name, 2: quantity, 3: price, 4: is_restock, 5: brand
+        final qtyVal = row[qtyCol];
+        final typeVal = row[isRestockCol];
+        
+        // Convert is_restock to int (0=Sale, 1=Restock, 2=Actual)
+        int typeInt = 0;
+        if (typeVal is int) {
+          typeInt = typeVal;
+        } else if (typeVal is String) {
+          if (typeVal.toLowerCase() == 'actual') {
+            typeInt = 2;
+          } else if (typeVal.toLowerCase() == 'sale') {
+            typeInt = 0;
+          } else if (typeVal.toLowerCase() == 'restock') {
+            typeInt = 1;
+          }
+        } else {
+          typeInt = int.tryParse(typeVal?.toString() ?? '0') ?? 0;
+        }
 
-        if (type == 'actual') {
-          stock = value.toInt(); // sets exact stock
-        } else if (type == 'restock' || type == 'fabrication') {
-          stock += value.toInt(); // adds to stock
-        } else if (type == 'sale') {
-          stock -= value.toInt(); // subtracts from stock
+        final qty = double.tryParse(qtyVal?.toString() ?? '0') ?? 0;
+
+        debugPrint('[STOCK] [$i] is_restock=$typeInt, qty=$qty');
+
+        // Apply desktop app algorithm
+        if (typeInt == 2) {
+          stock = qty.toInt(); // Actual: reset to exact value
+          debugPrint('[STOCK] [$i] ACTUAL: reset stock to $stock');
+        } else if (typeInt == 1) {
+          stock += qty.toInt(); // Restock: add
+          debugPrint('[STOCK] [$i] RESTOCK: +${qty.toInt()}, stock now $stock');
+        } else if (typeInt == 0) {
+          stock -= qty.toInt(); // Sale: subtract
+          debugPrint('[STOCK] [$i] SALE: -${qty.toInt()}, stock now $stock');
         }
       }
 
-      debugPrint('[STOCK] Calculated stock for product $productId: $stock');
-      return stock < 0 ? 0 : stock;
+      // Ensure non-negative
+      final result = stock < 0 ? 0 : stock;
+      debugPrint('[STOCK] ✓ Final running stock: $result');
+      return result;
 
     } catch (e) {
-      debugPrint('[ERROR] getCurrentStock: $e');
+      debugPrint('[ERROR] getCurrentStock exception: $e');
       return 0;
     }
   }
 
   /// Get product price from database
+  /// Searches for price column using multiple candidate names
   Future<double> getProductPrice(String dbFileName, int productId) async {
     if (kIsWeb) return 0.0;
     try {
@@ -419,25 +567,41 @@ class DbHelper {
         "SELECT name FROM sqlite_master WHERE type='table'"
       );
       final tableNames = tables.map((t) => t['name'] as String).toList();
-      String tableName = tableNames.contains('products') ? 'products' : tableNames.first;
+      debugPrint('[PRICE] Available tables: $tableNames');
 
-      // Get price column — try common names
+      String tableName = tableNames.contains('products') ? 'products' : tableNames.first;
+      debugPrint('[PRICE] Using table: $tableName');
+
+      // Get price column — try common names from desktop app
       final cols = await db.rawQuery('PRAGMA table_info($tableName)');
       final colNames = cols.map((c) => c['name'] as String).toList();
-      final priceCol = _findColumn(colNames, ['price', 'srp', 'selling_price', 'cost', 'unit_price']);
+      debugPrint('[PRICE] Available columns: $colNames');
+
+      final priceCol = _findColumn(colNames,
+        ['price', 'srp', 'selling_price', 'sell_price', 'cost', 'unit_price']);
 
       if (priceCol == null) {
-        debugPrint('[DB] No price column found in $tableName');
+        debugPrint('[ERROR] No price column found in $tableName. Columns: $colNames');
         return 0.0;
       }
+
+      debugPrint('[PRICE] Using price column: $priceCol');
 
       final rows = await db.rawQuery(
         'SELECT "$priceCol" FROM $tableName WHERE rowid=?',
         [productId],
       );
 
-      if (rows.isEmpty) return 0.0;
-      return double.tryParse(rows.first[priceCol]?.toString() ?? '0') ?? 0.0;
+      debugPrint('[PRICE] Query result for rowid=$productId: $rows');
+
+      if (rows.isEmpty) {
+        debugPrint('[PRICE] No product found for rowid=$productId');
+        return 0.0;
+      }
+
+      final price = double.tryParse(rows.first[priceCol]?.toString() ?? '0') ?? 0.0;
+      debugPrint('[PRICE] Parsed price: $price');
+      return price;
 
     } catch (e) {
       debugPrint('[ERROR] getProductPrice: $e');
@@ -445,15 +609,4 @@ class DbHelper {
     }
   }
 
-  /// Helper to find table name
-  String? _findTableName(List<String> available, List<String> candidates) {
-    for (final candidate in candidates) {
-      if (available.any((t) => t.toLowerCase() == candidate.toLowerCase())) {
-        return available.firstWhere(
-          (t) => t.toLowerCase() == candidate.toLowerCase(),
-        );
-      }
-    }
-    return null;
-  }
 }
