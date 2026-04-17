@@ -4,8 +4,10 @@ import 'package:file_picker/file_picker.dart';
 import '../constants/category_map.dart';
 import '../db/db_helper.dart';
 import '../models/product.dart';
+import '../widgets/search_result_tile.dart';
 import 'product_detail_screen.dart';
 import 'diagnostic_screen.dart';
+import 'history_screen.dart';
 
 class SearchScreen extends StatefulWidget {
   final String category;
@@ -57,6 +59,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   void _onSearchChanged() {
+    setState(() {}); // Rebuild to update clear button visibility
     _debounceSearch();
   }
 
@@ -108,6 +111,18 @@ class _SearchScreenState extends State<SearchScreen> {
         title: Text('${widget.category} — ${widget.unit}'),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'History',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => HistoryScreen(category: widget.category),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.bug_report),
             tooltip: 'Diagnose DB',
@@ -167,45 +182,117 @@ class _SearchScreenState extends State<SearchScreen> {
                 )
           : Column(
               children: [
+                // Modern Search Bar
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: TextField(
                     controller: _searchController,
+                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: 'e.g. 30-47-7 or TC 30 x 47 x 7 NOK',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
+                      hintStyle: const TextStyle(color: Color(0xFF777777)),
+                      prefixIcon: const Icon(
+                        Icons.search,
+                        color: Color(0xFFE53935),
                       ),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear,
+                                  color: Color(0xFFE53935)),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchResults = []);
+                              },
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: const Color(0xFF1A1A1A),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(28),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF2C2C2C),
+                          width: 1,
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(28),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF2C2C2C),
+                          width: 1,
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(28),
+                        borderSide: const BorderSide(
+                          color: Color(0xFFE53935),
+                          width: 2,
+                        ),
+                      ),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                     ),
                   ),
                 ),
                 Expanded(
                   child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(0xFFE53935),
+                            ),
+                          ),
+                        )
                       : _searchResults.isEmpty
                           ? Center(
-                              child: Text(
-                                _searchController.text.isEmpty
-                                    ? 'Enter search terms'
-                                    : 'No products found.',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Theme.of(context).disabledColor,
-                                ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    _searchController.text.isEmpty
+                                        ? Icons.search
+                                        : Icons.inbox,
+                                    size: 64,
+                                    color: const Color(0xFF555555),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _searchController.text.isEmpty
+                                        ? 'Enter search terms'
+                                        : 'No products found.',
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      color: Color(0xFF888888),
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  if (_searchController.text.isNotEmpty)
+                                    const SizedBox(height: 8),
+                                  if (_searchController.text.isNotEmpty)
+                                    const Text(
+                                      'Try a different search term',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Color(0xFF666666),
+                                      ),
+                                    ),
+                                ],
                               ),
                             )
                           : ListView.builder(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 0, vertical: 8),
                               itemCount: _searchResults.length,
                               itemBuilder: (context, index) {
                                 final product = _searchResults[index];
-                                return ListTile(
-                                  title: Text(product.displayName),
+                                return SearchResultTile(
+                                  code: '${product.type} ${product.innerDiameter.toStringAsFixed(1).replaceAll('.0', '')}-${product.outerDiameter.toStringAsFixed(1).replaceAll('.0', '')}-${product.thickness.toStringAsFixed(1).replaceAll('.0', '')}',
+                                  brand: product.brand,
                                   onTap: () {
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (context) => ProductDetailScreen(
+                                        builder: (context) =>
+                                            ProductDetailScreen(
                                           product: product,
                                           category: widget.category,
                                         ),
@@ -381,6 +468,9 @@ class _SearchScreenState extends State<SearchScreen> {
             backgroundColor: Colors.green,
           ),
         );
+
+        // Show clear database confirmation dialog
+        _showClearDbDialog(dbFileName);
       }
     } catch (e) {
       debugPrint('[ERROR] _exportDatabase: $e');
@@ -388,6 +478,71 @@ class _SearchScreenState extends State<SearchScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Export failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showClearDbDialog(String dbFileName) async {
+    if (!mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Clear imported database?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will remove the imported database from this device. Make sure your export was saved successfully before clearing.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'Keep',
+              style: TextStyle(color: Colors.white54),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final cleared = await _dbHelper.clearDb(dbFileName);
+      if (!mounted) return;
+      
+      if (cleared) {
+        // Update UI state to show no database loaded
+        setState(() {
+          _dbExists = false;
+          _searchResults = [];
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Database cleared successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to clear database'),
             backgroundColor: Colors.red,
           ),
         );

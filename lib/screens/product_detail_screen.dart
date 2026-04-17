@@ -279,6 +279,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             backgroundColor: Colors.green,
           ),
         );
+
+        // Show clear database confirmation dialog
+        _showClearDbDialog(dbFileName);
       }
     } catch (e) {
       debugPrint('[ERROR] exportDb: $e');
@@ -289,6 +292,72 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             backgroundColor: Colors.red,
           ),
         );
+      }
+    }
+  }
+
+  Future<void> _showClearDbDialog(String dbFileName) async {
+    if (!mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Clear imported database?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will remove the imported database from this device. Make sure your export was saved successfully before clearing.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'Keep',
+              style: TextStyle(color: Colors.white54),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final cleared = await _dbHelper.clearDb(dbFileName);
+      if (!mounted) return;
+      
+      if (cleared) {
+        // Navigate back to search screen which will show no database
+        Navigator.pop(context);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Database cleared successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to clear database'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }

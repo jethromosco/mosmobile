@@ -168,12 +168,11 @@ class DbHelper {
         return [];
       }
 
-      // Assign dimensions using physical logic:
-      // OD (outer diameter) = largest, ID (inner diameter) = smallest, TH (thickness) = middle
-      nums.sort();
-      final id = nums[0];      // Smallest = inner diameter
-      final thk = nums[1];     // Middle = thickness
-      final od = nums[2];      // Largest = outer diameter
+      // Assign dimensions in order of input:
+      // First number = ID, Second number = OD, Third number = TH
+      final id = nums[0];      // First = inner diameter
+      final od = nums[1];      // Second = outer diameter
+      final thk = nums[2];     // Third = thickness
 
       debugPrint('[SEARCH] ID=$id, OD=$od, THK=$thk');
 
@@ -353,6 +352,59 @@ class DbHelper {
     }
   }
 
+  /// Clears (deletes) a database from cache and storage
+  /// Closes the database connection, removes from _databases cache, and deletes the .db file
+  /// Also attempts to delete WAL (-wal) and SHM (-shm) sidecar files if they exist
+  Future<bool> clearDb(String dbFileName) async {
+    if (kIsWeb) {
+      debugPrint('[DB] clearDb skipped on web');
+      return false;
+    }
+    try {
+      // Close the database connection if it's open
+      if (_databases.containsKey(dbFileName) && _databases[dbFileName] != null) {
+        await _databases[dbFileName]!.close();
+        debugPrint('[DB] Database connection closed: $dbFileName');
+      }
+
+      // Remove from cache
+      _databases.remove(dbFileName);
+      debugPrint('[DB] Database removed from cache: $dbFileName');
+
+      // Get database path
+      final dbPath = await getDbPath(dbFileName);
+
+      // Delete the main .db file
+      final dbFile = File(dbPath);
+      if (await dbFile.exists()) {
+        await dbFile.delete();
+        debugPrint('[DB] Database file deleted: $dbPath');
+      }
+
+      // Delete WAL sidecar file if it exists
+      final walPath = '$dbPath-wal';
+      final walFile = File(walPath);
+      if (await walFile.exists()) {
+        await walFile.delete();
+        debugPrint('[DB] WAL file deleted: $walPath');
+      }
+
+      // Delete SHM sidecar file if it exists
+      final shmPath = '$dbPath-shm';
+      final shmFile = File(shmPath);
+      if (await shmFile.exists()) {
+        await shmFile.delete();
+        debugPrint('[DB] SHM file deleted: $shmPath');
+      }
+
+      debugPrint('[DB] Database cleared successfully: $dbFileName');
+      return true;
+    } catch (e) {
+      debugPrint('[ERROR] clearDb: $e');
+      return false;
+    }
+  }
+
   /// Get current stock count for a product from transactions
   Future<int> getCurrentStock(String dbFileName, int productRowId) async {
     if (kIsWeb) return 0;
@@ -394,7 +446,7 @@ class DbHelper {
       final prodThk = prod[prodThkCol];
       final prodBrand = prod[prodBrandCol]?.toString().trim() ?? '';
       
-      debugPrint('[STOCK] Product key: type=$prodType, id=$prodId, od=$prodOd, thk=$prodThk, brand=$prodBrand');
+      debugPrint('[STOCK] Product lookup: type=$prodType, id=$prodId, od=$prodOd, th=$prodThk, brand=$prodBrand');
 
       // Find transactions table
       final tables = await db.rawQuery(
@@ -443,19 +495,34 @@ class DbHelper {
         return 0;
       }
 
+      // **CRITICAL BUG FIX #1**: Verify isRestockCol is NOT accidentally the product type column
+      if (isRestockCol == typeCol) {
+        debugPrint('[ERROR] BUG: isRestockCol resolved to same column as typeCol ("$typeCol"). This means "is_restock" column does not exist in transactions table.');
+        debugPrint('[ERROR] Available columns: $colNames');
+        return 0;
+      }
+
+      debugPrint('[STOCK] Column mapping: typeCol=$typeCol, idCol=$idCol, odCol=$odCol, thkCol=$thkCol, brandCol=$brandCol, isRestockCol=$isRestockCol, dateCol=$dateCol, nameCol=$nameCol, qtyCol=$qtyCol');
+
       // Query transactions with ONLY the 6 columns needed, in the CORRECT ORDER
       // Desktop app format: date, name, quantity, price, is_restock, brand
       List<Map<String, dynamic>> rows = [];
       try {
-        debugPrint('[STOCK] WHERE clause will use: type="$prodType" (${prodType.runtimeType}), id="$prodId" (${prodId.runtimeType}), od="$prodOd", thk="$prodThk", brand="$prodBrand" (${prodBrand.runtimeType})');
+        debugPrint('[STOCK] Query for: type=$prodType, id=$prodId, od=$prodOd, th=$prodThk, brand=$prodBrand');
         
+        // **FIX**: Use NUMERIC comparison for dimensions (they're stored as numbers, not text)
+        // Both products and transactions store dimensions as INTEGER or REAL
         rows = await db.rawQuery(
           'SELECT "$dateCol", "$nameCol", "$qtyCol", "$priceCol", "$isRestockCol", "$brandCol" FROM $txTable '
-          'WHERE "$typeCol"=? AND "$idCol"=? AND "$odCol"=? AND "$thkCol"=? AND "$brandCol"=? '
+          'WHERE CAST("$typeCol" AS TEXT)=CAST(? AS TEXT) '
+          'AND CAST("$idCol" AS REAL)=CAST(? AS REAL) '
+          'AND CAST("$odCol" AS REAL)=CAST(? AS REAL) '
+          'AND CAST("$thkCol" AS REAL)=CAST(? AS REAL) '
+          'AND CAST("$brandCol" AS TEXT)=CAST(? AS TEXT) '
           'ORDER BY "$dateCol" ASC, rowid ASC',
           [prodType, prodId, prodOd, prodThk, prodBrand],
         );
-        debugPrint('[STOCK] Query succeeded, found ${rows.length} transactions');
+        debugPrint('[STOCK] ✓ Query succeeded, found ${rows.length} transactions for this product');
       } catch (e) {
         debugPrint('[ERROR] Transaction query failed: $e');
         return 0;
@@ -463,7 +530,7 @@ class DbHelper {
 
       if (rows.isEmpty) {
         debugPrint('[STOCK] ⚠️ NO TRANSACTIONS FOUND!');
-        debugPrint('[STOCK] Looking for: type=$prodType, id=$prodId, od=$prodOd, thk=$prodThk, brand=$prodBrand');
+        debugPrint('[STOCK] Looking for: type=$prodType, id=$prodId, od=$prodOd, th=$prodThk, brand=$prodBrand');
         
         // Debug: Show ALL transactions to see what's actually in the database
         try {
@@ -499,14 +566,19 @@ class DbHelper {
       debugPrint('[STOCK] First transaction: ${rows.first}');
       debugPrint('[STOCK] Last transaction: ${rows.last}');
 
-      // Process transactions chronologically using desktop app algorithm
-      // Rows now contain: date, name, quantity, price, is_restock, brand (in that order)
+      // Process transactions chronologically using EXACT DESKTOP APP ALGORITHM
+      // **CRITICAL FIX**: SALE quantities are stored as NEGATIVE in database!
+      // - is_restock=0 (SALE): quantity is stored negative (e.g., -50)
+      // - is_restock=1 (RESTOCK): quantity is stored positive (e.g., +50)
+      // - is_restock=2 (ACTUAL): quantity is exact stock value
+      // 
+      // Algorithm: For SALE/RESTOCK, just ADD the quantity (which can be negative)
+      // Never subtract - the sign is already in the data!
+      
       int stock = 0;
       for (int i = 0; i < rows.length; i++) {
         final row = rows[i];
         
-        // Unpack in the CORRECT ORDER that desktop app expects
-        // Index 0: date, 1: name, 2: quantity, 3: price, 4: is_restock, 5: brand
         final qtyVal = row[qtyCol];
         final typeVal = row[isRestockCol];
         
@@ -515,37 +587,40 @@ class DbHelper {
         if (typeVal is int) {
           typeInt = typeVal;
         } else if (typeVal is String) {
-          if (typeVal.toLowerCase() == 'actual') {
-            typeInt = 2;
-          } else if (typeVal.toLowerCase() == 'sale') {
-            typeInt = 0;
-          } else if (typeVal.toLowerCase() == 'restock') {
-            typeInt = 1;
-          }
+          typeInt = int.tryParse(typeVal) ?? 0;
         } else {
           typeInt = int.tryParse(typeVal?.toString() ?? '0') ?? 0;
         }
 
-        final qty = double.tryParse(qtyVal?.toString() ?? '0') ?? 0;
+        final qty = double.tryParse(qtyVal?.toString() ?? '0') ?? 0.0;
 
-        debugPrint('[STOCK] [$i] is_restock=$typeInt, qty=$qty');
-
-        // Apply desktop app algorithm
+        String actionName = 'UNKNOWN';
         if (typeInt == 2) {
-          stock = qty.toInt(); // Actual: reset to exact value
-          debugPrint('[STOCK] [$i] ACTUAL: reset stock to $stock');
+          actionName = 'ACTUAL';
         } else if (typeInt == 1) {
-          stock += qty.toInt(); // Restock: add
-          debugPrint('[STOCK] [$i] RESTOCK: +${qty.toInt()}, stock now $stock');
+          actionName = 'RESTOCK';
         } else if (typeInt == 0) {
-          stock -= qty.toInt(); // Sale: subtract
-          debugPrint('[STOCK] [$i] SALE: -${qty.toInt()}, stock now $stock');
+          actionName = 'SALE';
+        }
+
+        // Apply DESKTOP APP ALGORITHM
+        if (typeInt == 2) {
+          // ACTUAL: Replace stock with exact value
+          stock = qty.toInt();
+          debugPrint('[STOCK] [$i] $actionName: stock = ${qty.toInt()} (date=${row[dateCol]})');
+        } else {
+          // SALE or RESTOCK: Add quantity (qty is already signed correctly!)
+          // SALE: qty is negative (e.g., -50)
+          // RESTOCK: qty is positive (e.g., +50)
+          final oldStock = stock;
+          stock += qty.toInt();
+          debugPrint('[STOCK] [$i] $actionName: stock = $oldStock + ${qty.toInt()} = $stock (date=${row[dateCol]})');
         }
       }
 
       // Ensure non-negative
       final result = stock < 0 ? 0 : stock;
-      debugPrint('[STOCK] ✓ Final running stock: $result');
+      debugPrint('[STOCK] ✓✓✓ FINAL STOCK: $result (after ${rows.length} transactions)');
       return result;
 
     } catch (e) {
